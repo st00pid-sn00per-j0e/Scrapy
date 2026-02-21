@@ -1,0 +1,5 @@
+Scrapy>=2.14,<3
+pandas>=2.3,<3
+dnspython>=2.7,<3
+openpyxl>=3.1,<4
+xlrd>=2.0,<3
