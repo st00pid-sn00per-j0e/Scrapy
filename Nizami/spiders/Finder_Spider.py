@@ -63,7 +63,7 @@ class FinderSpider(scrapy.Spider):
     }
 
     custom_settings = {
-        "DEPTH_LIMIT": 1,
+        "DEPTH_LIMIT": 2,
         "CONCURRENT_REQUESTS": 16,
         "CONCURRENT_REQUESTS_PER_DOMAIN": 4,
         "DOWNLOAD_TIMEOUT": 15,
@@ -74,6 +74,14 @@ class FinderSpider(scrapy.Spider):
         "QUALIFIED_SITES_OUTPUT": "qualified_sites.csv",
         "BRUTE_EMAIL_VALIDATE_DNS": False,
     }
+    
+    # Extended URL patterns to follow for more pages with emails
+    FOLLOW_URL_PATTERNS = [
+        "contact", "about", "team", "support", "info", "email",
+        "contact-us", "get-in-touch", "our-team", "staff", "people",
+        "meet-the-team", "about-us", "company", "partners", "locations",
+        "address", "write-to-us", "inquiry", "enquiry", "hello"
+    ]
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
@@ -456,15 +464,17 @@ class FinderSpider(scrapy.Spider):
 
         outputs = []
 
+        # Lowered threshold from 4 to 2 for more sites to qualify
         if (
             not self.domain_data[domain]["blocked"]
-            and self.domain_data[domain]["include_count"] >= 4
+            and self.domain_data[domain]["include_count"] >= 2
         ):
             if domain not in self.yielded_domains:
                 self.yielded_domains.add(domain)
                 outputs.append(self.build_item(domain))
 
-        if self.domain_data[domain]["include_count"] < 8 and response.meta["depth"] < 1:
+        # Allow deeper crawling with depth limit 2
+        if self.domain_data[domain]["include_count"] < 10 and response.meta["depth"] < 2:
             root_url = response.meta["root_url"]
             for link in response.css("a::attr(href)").getall():
                 next_url = response.urljoin(link)
@@ -472,12 +482,13 @@ class FinderSpider(scrapy.Spider):
                 if domain not in urlparse(next_url).netloc.lower():
                     continue
 
-                if next_url.lower().endswith((".jpg", ".png", ".pdf", ".zip", ".gif")):
+                if next_url.lower().endswith((".jpg", ".png", ".pdf", ".zip", ".gif", ".svg", ".webp")):
                     continue
 
+                # Use the extended FOLLOW_URL_PATTERNS list
                 if not any(
                     item in next_url.lower()
-                    for item in ["contact", "about", "team", "support", "info", "email"]
+                    for item in self.FOLLOW_URL_PATTERNS
                 ):
                     continue
 
