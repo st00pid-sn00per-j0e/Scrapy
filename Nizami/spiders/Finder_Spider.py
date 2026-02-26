@@ -1,7 +1,8 @@
 import json
 import os
 import re
-from urllib.parse import urlparse
+from html import unescape
+from urllib.parse import unquote, urlparse
 
 import dns.resolver
 import pandas as pd
@@ -15,6 +16,25 @@ from twisted.internet.defer import DeferredList
 
 class FinderSpider(scrapy.Spider):
     name = "Finder_Spider"
+
+    EMAIL_REGEX = re.compile(
+        r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,10}",
+        re.IGNORECASE,
+    )
+    MAILTO_REGEX = re.compile(
+        r"mailto:\s*([A-Za-z0-9._%+\-]+(?:%40|@)[A-Za-z0-9.\-]+\.[A-Za-z]{2,10})",
+        re.IGNORECASE,
+    )
+    OBFUSCATED_EMAIL_REGEX = re.compile(
+        r"([A-Za-z0-9._%+\-]{1,64})\s*"
+        r"(?:\[\s*at\s*\]|\(\s*at\s*\)|\{\s*at\s*\}|\s+at\s+|@)\s*"
+        r"([A-Za-z0-9.\-]{1,253})\s*"
+        r"(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\{\s*dot\s*\}|\s+dot\s+|\.)\s*"
+        r"([A-Za-z]{2,10})",
+        re.IGNORECASE,
+    )
+    HEX_ESCAPE_REGEX = re.compile(r"\\x([0-9a-fA-F]{2})")
+    UNICODE_ESCAPE_REGEX = re.compile(r"\\u([0-9a-fA-F]{4})")
 
     IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".ico")
     TRASH_EMAIL_DOMAINS = {
@@ -52,6 +72,7 @@ class FinderSpider(scrapy.Spider):
             "Nizami.pipelines.QualifiedSitesCsvPipeline": 300,
         },
         "QUALIFIED_SITES_OUTPUT": "qualified_sites.csv",
+        "BRUTE_EMAIL_VALIDATE_DNS": False,
     }
 
     @classmethod
@@ -303,6 +324,69 @@ class FinderSpider(scrapy.Spider):
 
         return list(set(urls))
 
+    @classmethod
+    def _decode_js_escapes(cls, source_text):
+        if not source_text:
+            return ""
+
+        decoded = cls.HEX_ESCAPE_REGEX.sub(
+            lambda match: chr(int(match.group(1), 16)),
+            source_text,
+        )
+        decoded = cls.UNICODE_ESCAPE_REGEX.sub(
+            lambda match: chr(int(match.group(1), 16)),
+            decoded,
+        )
+        return decoded
+
+    @classmethod
+    def _extract_emails_from_source(cls, source_text):
+        if not source_text:
+            return set()
+
+        blobs = []
+        raw = source_text
+        html_unescaped = unescape(raw)
+        url_decoded = unquote(html_unescaped)
+        js_decoded = cls._decode_js_escapes(url_decoded)
+
+        for blob in (raw, html_unescaped, url_decoded, js_decoded):
+            if blob and blob not in blobs:
+                blobs.append(blob)
+
+        found = set()
+        for blob in blobs:
+            for email in cls.EMAIL_REGEX.findall(blob):
+                found.add(email.strip().lower())
+
+            for email in cls.MAILTO_REGEX.findall(blob):
+                normalized = unquote(email).strip().lower()
+                normalized = normalized.replace("%40", "@")
+                found.add(normalized)
+
+            for match in cls.OBFUSCATED_EMAIL_REGEX.finditer(blob):
+                local = match.group(1).strip().lower()
+                domain_part = match.group(2).strip().lower().strip(".")
+                tld = match.group(3).strip().lower()
+                found.add(f"{local}@{domain_part}.{tld}")
+
+        return found
+
+    def _build_email_candidates(self, source_text):
+        candidates = []
+        seen = set()
+        extracted = self._extract_emails_from_source(source_text)
+        for email in extracted:
+            normalized_email = email.strip().lower()
+            normalized_email = normalized_email.replace("mailto:", "").strip(" <>\"'(),;")
+            if not normalized_email or normalized_email in seen:
+                continue
+            if self.is_trash_email(normalized_email):
+                continue
+            seen.add(normalized_email)
+            candidates.append(normalized_email)
+        return candidates
+
     def handle_request_error(self, failure):
         request = failure.request
         self.pending = max(0, self.pending - 1)
@@ -326,7 +410,8 @@ class FinderSpider(scrapy.Spider):
                     "emails": set(),
                 }
 
-            text = response.text.lower()
+            source_text = response.text
+            text = source_text.lower()
 
             for keyword in self.block_keywords:
                 if keyword in text:
@@ -336,30 +421,18 @@ class FinderSpider(scrapy.Spider):
             count = sum(text.count(keyword) for keyword in self.include_keywords)
             self.domain_data[domain]["include_count"] += count
 
-            emails = re.findall(
-                r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
-                text,
-            )
-
-            candidates = []
-            seen_candidates = set()
-            for email in emails:
-                normalized_email = email.strip().lower()
-                if self.is_trash_email(normalized_email):
-                    continue
-                if normalized_email in seen_candidates:
-                    continue
-                seen_candidates.add(normalized_email)
-                candidates.append(normalized_email)
+            candidates = self._build_email_candidates(source_text)
 
             results = []
             if candidates:
-                deferreds = []
-                for email in candidates:
-                    deferreds.append(threads.deferToThread(self._validate_email_dns, email))
-
-                dlist = DeferredList(deferreds, consumeErrors=True)
-                results = await maybe_deferred_to_future(dlist)
+                if self.settings.getbool("BRUTE_EMAIL_VALIDATE_DNS", False):
+                    deferreds = []
+                    for email in candidates:
+                        deferreds.append(threads.deferToThread(self._validate_email_dns, email))
+                    dlist = DeferredList(deferreds, consumeErrors=True)
+                    results = await maybe_deferred_to_future(dlist)
+                else:
+                    results = [(True, email) for email in candidates]
 
             return self._after_dns_checks(results, response, domain, batch_index)
         finally:
