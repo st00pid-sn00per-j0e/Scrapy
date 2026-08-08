@@ -60,6 +60,13 @@ class FinderSpider(scrapy.Spider):
         "no-reply",
         "donotreply",
         "do-not-reply",
+        ".png",
+        ".svg",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        
     }
 
     custom_settings = {
@@ -261,7 +268,28 @@ class FinderSpider(scrapy.Spider):
         with open(keyword_path, "r", encoding="utf-8") as file:
             data = json.load(file)
 
-        include = [keyword.lower() for keyword in data.get("include_keywords", [])]
+        include_raw = data.get("include_keywords", [])
+        self.keyword_category = {}
+
+        if isinstance(include_raw, dict):
+            # New format: {"Category_Name": ["kw1", "kw2", ...]}
+            include = {}
+            for category, keywords in include_raw.items():
+                category_keywords = [
+                    keyword.lower() for keyword in (keywords or [])
+                ]
+                include[category] = category_keywords
+                for keyword in category_keywords:
+                    self.keyword_category[keyword] = category
+        else:
+            # Backward compatible flat list
+            include = {
+                "General": [keyword.lower() for keyword in include_raw]
+            }
+            self.keyword_category = {
+                keyword: "General" for keyword in include["General"]
+            }
+
         block = [keyword.lower() for keyword in data.get("block_keywords", [])]
         return include, block
 
@@ -414,6 +442,8 @@ class FinderSpider(scrapy.Spider):
             if domain not in self.domain_data:
                 self.domain_data[domain] = {
                     "include_count": 0,
+                    "matched_keywords": set(),
+                    "matched_categories": set(),
                     "blocked": False,
                     "emails": set(),
                 }
@@ -426,8 +456,21 @@ class FinderSpider(scrapy.Spider):
                     self.domain_data[domain]["blocked"] = True
                     return
 
-            count = sum(text.count(keyword) for keyword in self.include_keywords)
+            all_keywords = [
+                keyword
+                for keywords in self.include_keywords.values()
+                for keyword in keywords
+            ]
+
+            count = sum(text.count(keyword) for keyword in all_keywords)
             self.domain_data[domain]["include_count"] += count
+
+            for keyword in all_keywords:
+                if keyword in text:
+                    self.domain_data[domain]["matched_keywords"].add(keyword)
+                    category = self.keyword_category.get(keyword)
+                    if category:
+                        self.domain_data[domain]["matched_categories"].add(category)
 
             candidates = self._build_email_candidates(source_text)
 
@@ -520,6 +563,7 @@ class FinderSpider(scrapy.Spider):
             "Website URL": website_url,
             "Company Name": company,
             "Phone Number": phone,
-            "Keyword Matches": data["include_count"],
+            "Keywords - Team": ",".join(sorted(data["matched_keywords"])),
+            "Specification": ",".join(sorted(data["matched_categories"])),
             "Emails": ",".join(sorted(data["emails"])),
         }

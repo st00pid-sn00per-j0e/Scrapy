@@ -9,7 +9,8 @@ class QualifiedSitesCsvPipeline:
         "Website URL",
         "Company Name",
         "Phone Number",
-        "Keyword Matches",
+        "Keywords - Team",
+        "Specification",
         "Emails",
     ]
 

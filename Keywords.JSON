@@ -1,12 +1,21 @@
 {
-  "include_keywords": [
-    "marketing",
-    "seo",
-    "automation",
-    "digital",
-    "ai",
-    "software"
-  ],
+  "include_keywords": {
+    "Agency": [
+      "marketing",
+      "seo",
+      "automation",
+      "digital",
+      "ai",
+      "software"
+    ],
+    "Software": [
+      "saas",
+      "cloud",
+      "platform",
+      "app",
+      "api"
+    ]
+  },
   "block_keywords": [
     "casino",
     "betting",
