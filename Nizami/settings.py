@@ -82,6 +82,8 @@ DOWNLOAD_DELAY = 1
 #HTTPCACHE_DIR = "httpcache"
 #HTTPCACHE_IGNORE_HTTP_CODES = []
 #HTTPCACHE_STORAGE = "scrapy.extensions.httpcache.FilesystemCacheStorage"
-
+ITEM_PIPELINES = {
+    "Nizami.pipelines.QualifiedSitesCsvPipeline": 300,
+}
 # Set settings whose default value is deprecated to a future-proof value
 FEED_EXPORT_ENCODING = "utf-8"

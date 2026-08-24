@@ -88,7 +88,7 @@ class NizamiDownloaderMiddleware:
 
     def process_exception(self, request, exception, spider):
         # Called when a download handler or a process_request()
-        # (from other downloader middleware) raises an exception.
+        # (from other spider middleware) raises an exception.
 
         # Must either:
         # - return None: continue processing this exception
